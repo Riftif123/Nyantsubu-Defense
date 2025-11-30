@@ -1,0 +1,128 @@
+local ReplicatedStorgae = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
+local DataBase = DataStoreService:GetDataStore("database")
+local Events = ReplicatedStorgae.Events
+local Functions = ReplicatedStorgae.Functions
+
+local Data = {}
+local DefaultData = {
+	["Cash"] = 0;
+	["Upgrades"] = {};
+	["Inventory"] = {};
+	["DiscoveredEnemies"] = {};
+	["SelectedNyantsubu"] = {"Nyantsubu"};
+	["OwnedNyantsubu"] = {"Nyantsubu"};
+	["NyantsubuLevel"] = {["Nyantsubu"] = 1}
+}
+local TestData = {
+	["Cash"] = 15000;
+	["Upgrades"] = {};
+	["Inventory"] = {"Nyantsubu", "Nyantsubu", "Nyantsubu", "Nyantsubu", "Nyantsubu"};
+	["DiscoveredEnemies"] = {};
+	["SelectedNyantsubu"] = {"Nyantsubu"};
+	["OwnedNyantsubu"] = {"Nyantsubu"};
+	["NyantsubuLevel"] = {["Nyantsubu"] = 1}
+}
+
+local function LoadData(plr)
+	local Success = nil
+	local PlayerData = nil
+	local Attempt = 1
+	
+	repeat
+		Success, PlayerData = pcall(function()
+			return DataBase:GetAsync(plr.UserId)
+		end)
+		
+		Attempt += 1
+		task.wait()
+	until Success or Attempt == 3
+	
+	if Success then
+		if not PlayerData then
+			PlayerData = DefaultData
+		end
+		Data[plr.UserId] = PlayerData
+	else
+		plr:Kick("mb yo data is lost g. mb gang just come back in 6 or 7 minutes and we gotchu homie")
+	end
+	
+	if RunService:IsStudio() then
+		Data[plr.UserId] = TestData
+	end
+end
+
+local function SaveData(plr)
+	if Data[plr.UserId] and not RunService:IsStudio() then
+		local Success = nil
+		local PlayerData = nil
+		local Attempt = 1
+
+		repeat
+			Success, PlayerData = pcall(function()
+				return DataBase:UpdateAsync(plr.UserId, function()
+					return Data[plr.UserId]
+				end)
+			end)
+
+			Attempt += 1
+			task.wait()
+		until Success or Attempt == 3
+	end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+	LoadData(plr)
+end)
+
+Players.PlayerRemoving:Connect(function(plr)
+	SaveData(plr)
+	Data[plr.UserId] = nil
+end)
+
+game:BindToClose(function()
+	if not RunService:IsStudio() then
+		for i, plr in ipairs(Players:GetPlayers()) do
+			task.spawn(function()
+				SaveData(plr)
+			end)
+		end
+	end
+end)
+
+Functions.GetData.OnServerInvoke = function(plr)
+	return Data[plr.UserId]
+end
+
+Events.AddData.OnServerEvent:Connect(function(plr, DataType, Information)
+	table.insert(Data[plr.UserId][DataType], Information)
+	
+	if #Data[plr.UserId]["SelectedNyantsubu"] > 8 then
+		table.remove(Data[plr.UserId]["SelectedNyantsubu"], 1)
+	end
+end)
+
+Events.RemoveData.OnServerEvent:Connect(function(plr, DataType, Information)
+	if table.find(Data[plr.UserId][DataType], Information) then
+		table.remove(Data[plr.UserId][DataType], table.find(Data[plr.UserId][DataType], Information))
+	end
+end)
+
+Events.UnequipAll.OnServerEvent:Connect(function(plr)
+	Data[plr.UserId]["SelectedNyantsubu"] = {}
+end)
+
+Events.ChangeMoney.OnServerEvent:Connect(function(plr, amount)
+	Data[plr.UserId].Cash += amount
+end)
+
+Events.SetLevel.OnServerEvent:Connect(function(plr, Unit, Level)
+	Data[plr.UserId].NyantsubuLevel[Unit] = Level
+end)
+
+Events.Teleport.OnServerEvent:Connect(function(plr, Destination)
+	plr.Character:SetPrimaryPartCFrame(Destination)
+end)
