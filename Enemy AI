@@ -1,0 +1,88 @@
+local Humanoid = script.Parent
+local Model = Humanoid.Parent
+
+local MoveAnim = Humanoid:LoadAnimation(script.Move)
+local AttackAnim = Humanoid:LoadAnimation(script.Attack)
+
+local LastAttack = tick()
+local Range = 50
+local Damage = Model:GetAttribute("Damage")
+local AttackRange = Model:GetAttribute("Range")
+local AttackSpeed = Model:GetAttribute("AttackSpeed")
+local AOE = Model:GetAttribute("AOE")
+
+local Target = nil
+local SmallestDistance = 50
+local Direction = nil
+
+local Units = workspace.Units
+
+local Base = workspace.Base
+
+while wait() do
+	SmallestDistance = Range
+	Target = nil
+	
+	for i, Unit in ipairs(Units:GetChildren()) do
+		local Distance = Unit.PrimaryPart.Position - Model.PrimaryPart.Position
+		
+		if Distance.Magnitude < SmallestDistance and Distance.Magnitude < (Base.Enterance.Position - Model.PrimaryPart.Position).Magnitude and Unit:FindFirstChild("Humanoid").Health > 0 and Humanoid.Health > 0 and Unit:GetAttribute("Floating") == false then
+			Target = Unit
+			SmallestDistance = Distance.Magnitude
+			Direction = Distance.Unit
+		end
+	end
+	
+	if Target and Model.PrimaryPart.Position.Z < 86 then
+		if SmallestDistance > AttackRange then
+			Humanoid:Move(Direction)
+			
+			if MoveAnim.IsPlaying == false then
+				MoveAnim:Play()
+			end
+		else
+			Humanoid:Move(Vector3.new())
+			MoveAnim:Stop()
+			
+			if tick() - LastAttack >= AttackSpeed then
+				LastAttack = tick()
+				Model.AttackSound:Play()
+				AttackAnim:Play()
+				Target.Humanoid.Health -= Damage
+				
+				for i, unit in ipairs(Units:GetChildren()) do
+					if unit == Target then else
+						if unit:FindFirstChild("Humanoid").Health > 0 then
+							local Distance = (Target.PrimaryPart.Position - unit.PrimaryPart.Position).Magnitude
+							
+							if Distance <= AOE then
+								unit:FindFirstChild("Humanoid").Health -= Damage
+							end
+						end
+					end
+				end
+			end
+		end
+	else
+		local Distance = Base.Enterance.Position - Model.PrimaryPart.Position
+		SmallestDistance = Distance.Magnitude
+		Direction = Distance.Unit
+
+		if SmallestDistance > AttackRange then
+			Humanoid:Move(Direction)
+			if MoveAnim.IsPlaying == false then
+				MoveAnim:Play()
+			end
+		else
+			Humanoid:Move(Vector3.new())
+			MoveAnim:Stop()
+			
+			if tick() - LastAttack >= AttackSpeed then
+				LastAttack = tick()
+				Model.AttackSound:Play()
+				AttackAnim:Play()
+				Base.HP.Value -= Damage
+			end
+		end
+	end
+end
