@@ -1,0 +1,1312 @@
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Events = ReplicatedStorage.Events
+local Functions = ReplicatedStorage.Functions
+
+local CharacterInfo = require(script.CharacterInfo)
+local EnemyInfo = require(script.EnemyInfo)
+local AttributeColours = require(script.AttributeColours)
+
+local EnemyButtonCooldown = false
+local ChosenUnit = nil
+local SelectedUnit = nil
+
+local Attributes = {"Melee", "Ranged", "Floating", "Tank"}
+local Rarities = {"Basic", "Special"}
+local RarityFilter = {}
+local AttributeFilter = {}
+
+local GUI = script.Parent
+
+local Exit = GUI.Exit
+local Flash = GUI.Flash
+local CharacterRolled = GUI.CharacterRolled
+local Shop = GUI.Shop
+local Upgrades = GUI.Upgrades
+local Inventory = GUI.Inventory
+local EnemyIndex = GUI.EnemyIndex
+local Dialogue = GUI.Dialogue
+local MainUI = GUI.MainUI
+
+local ShopItems = Shop.Items
+local ViewportFrame = CharacterRolled.ViewportFrame
+local Money = MainUI.Money
+
+local ShopTrigger = workspace.Shop.NyantsubuMerchant.ProximityPrompt
+local UpgradeTrigger = workspace.Upgrades.NyanEngineer.ProximityPrompt
+local IndexTrigger = workspace.Library.Nerdtsubu.ProximityPrompt
+
+local Egg = GUI.Egg
+local EggImages = script.EggImages
+local EggContents = script.EggContents
+
+local BasicEggContents = require(EggContents.BasicEggContents)
+local BigEggContents = require(EggContents.BigEggContents)
+local ShinyEggContents = require(EggContents.ShinyEggContents)
+local ElementalEggContents = require(EggContents.ElementalEggContents)
+local GiganticEggContents = require(EggContents.GiganticEggContents)
+
+local Direction = "Left"
+local Clicks = 0
+local InEggTween = false
+local OpenningEgg = false
+
+local SwayRight = TweenService:Create(Egg, TweenInfo.new(1, Enum.EasingStyle.Linear), {Rotation = 5})
+local SwayLeft = TweenService:Create(Egg, TweenInfo.new(1, Enum.EasingStyle.Linear), {Rotation = -5})
+local CrackRight = TweenService:Create(Egg, TweenInfo.new(0.075, Enum.EasingStyle.Linear), {Rotation = 75, Size = UDim2.new(1.25, 0, 1.25, 0)})
+local CrackLeft = TweenService:Create(Egg, TweenInfo.new(0.075, Enum.EasingStyle.Linear), {Rotation = -75, Size = UDim2.new(1.25, 0, 1.25, 0)})
+local ReturnCrack = TweenService:Create(Egg, TweenInfo.new(0.75, Enum.EasingStyle.Exponential), {Rotation = 0, Size = UDim2.new(1, 0, 1, 0)})
+
+local UIOpen = false
+local UpgradeCooldown = false
+local SkipDialogue = false
+
+local function UpdateMoneyUI()
+	local Data = Functions.GetData:InvokeServer()
+	
+	if Data.Cash >= 1000 then
+		local MoneyDisplay = (math.floor(Data.Cash/100))/10
+		Money.Amount.Text = MoneyDisplay.."K$"
+		Shop.Money.Amount.Text = MoneyDisplay.."K$"
+		Upgrades.Money.Amount.Text = MoneyDisplay.."K$"
+		Inventory.Money.Amount.Text = MoneyDisplay.."K$"
+	else
+		Money.Amount.Text = Data.Cash.."$"
+		Shop.Money.Amount.Text = Data.Cash.."$"
+		Upgrades.Money.Amount.Text = Data.Cash.."$"
+		Inventory.Money.Amount.Text = Data.Cash.."$"
+	end
+end
+
+local function UpdateUpgradeUI(SelectedUpgrade)
+	local Data = Functions.GetData:InvokeServer()
+
+	local Amount = 0
+
+	for i, Upgrade in ipairs(Data["Upgrades"]) do
+		if Upgrade == SelectedUpgrade then
+			Amount += 1
+		end
+	end
+
+	Upgrades.Items[SelectedUpgrade].Title.Text = string.upper(SelectedUpgrade).." "
+
+	for i=1, Amount do
+		if Amount == 5 then
+			Upgrades.Items[SelectedUpgrade].Title.Text = string.upper(SelectedUpgrade).." V"
+		elseif Amount == 4 then
+			Upgrades.Items[SelectedUpgrade].Title.Text = string.upper(SelectedUpgrade).." IV"
+		elseif Amount > 1 then
+			Upgrades.Items[SelectedUpgrade].Title.Text = Upgrades.Items[SelectedUpgrade].Title.Text.."I"
+		else
+			Upgrades.Items[SelectedUpgrade].Title.Text = string.upper(SelectedUpgrade)
+		end
+	end
+
+	if Amount > 0 then
+		Upgrades.Items[SelectedUpgrade].FadeGroup.Visible = false
+	end
+
+	if Amount < 5 then
+		Upgrades.Items[SelectedUpgrade].Upgrade.Button.Text = 250 + (250 * math.pow(2,Amount)).."$"
+	else
+		Upgrades.Items[SelectedUpgrade].Upgrade.Button.Text = "MAX"
+		Upgrades.Items[SelectedUpgrade].Upgrade.Button.Interactable = false
+		Upgrades.Items[SelectedUpgrade].Upgrade.BackgroundColor3 = Color3.fromRGB(255, 5, 85)
+	end
+end
+
+local function HoverIcon(Icon)
+	script.Hover:Play()
+	TweenService:Create(Icon:FindFirstChild("ViewPorts"), TweenInfo.new(0.25), {Size = UDim2.new(1.1, 0, 1.1, 0)}):Play()
+end
+
+local function NotHoverIcon(Icon)
+	TweenService:Create(Icon:FindFirstChild("ViewPorts"), TweenInfo.new(0.25), {Size = UDim2.new(1, 0, 1, 0)}):Play()
+end
+
+local function OpenEgg(Cost, EggImage, EggContents, ClickAmount)
+	local Data = Functions.GetData:InvokeServer()
+
+	if Data["Cash"] >= Cost then
+		Events.ChangeMoney:FireServer(-Cost)
+
+		Shop.Visible = false
+		Egg.Click.Visible = true
+		Egg.Visible = true
+		Egg.Image = EggImage
+		Egg.Size = UDim2.new(0,0,0,0)
+		
+		TweenService:Create(Egg, TweenInfo.new(0.25, Enum.EasingStyle.Linear), {Size = UDim2.new(1, 0, 1, 0)}):Play()
+		
+		local Sway = "Right"
+		
+		repeat 
+			wait() 
+			if Sway == "Right" and InEggTween == false then 
+				if SwayRight.PlaybackState == Enum.PlaybackState.Playing then else
+					SwayRight:Play()
+				end
+				
+				SwayRight.Completed:Connect(function()
+					Sway = "Left"
+				end)
+			elseif InEggTween == false then
+				if SwayLeft.PlaybackState == Enum.PlaybackState.Playing then else
+					SwayLeft:Play()
+				end
+
+				SwayLeft.Completed:Connect(function()
+					Sway = "Right"
+				end)
+			end 
+		until ClickAmount == Clicks
+		Clicks = 0
+		Direction = "Left"
+		OpenningEgg = true
+		
+		SwayRight:Pause()
+		CrackRight:Pause()
+		SwayLeft:Pause()
+		CrackLeft:Pause()
+		ReturnCrack:Pause()
+		
+		script.OpenEgg:Play()
+		
+		TweenService:Create(Egg, TweenInfo.new(0.1, Enum.EasingStyle.Linear), {Size = UDim2.new(2,0,2,0), Rotation = 0}):Play()
+		TweenService:Create(Egg, TweenInfo.new(1, Enum.EasingStyle.Linear), {Size = UDim2.new(2,0,2,0), ImageTransparency = 1}):Play()
+		TweenService:Create(Flash, TweenInfo.new(0.75, Enum.EasingStyle.Linear), {Transparency = 0}):Play()
+		wait(1)
+		Egg.Visible = false
+		CharacterRolled.Visible = true
+
+		local RandomRarity = math.random(1,10000)
+		local ChosenRarity = nil
+
+		print(RandomRarity)
+
+		for i, Rarity in pairs(EggContents["Rarity Chance"]) do
+			if RandomRarity <= Rarity.Chance then
+				if not ChosenRarity then
+					ChosenRarity = Rarity
+				elseif Rarity.Chance < ChosenRarity.Chance then
+					ChosenRarity = Rarity
+				end
+			end
+		end
+
+		ChosenUnit = ChosenRarity.Units[math.random(1,#ChosenRarity.Units)]:Clone()
+		ChosenUnit.Parent = ViewportFrame
+
+		local Outline = ChosenUnit:Clone()
+		Outline.Parent = CharacterRolled.ViewportFrameOutline
+		
+		ViewportFrame.Size = UDim2.new(0,0,0,0)
+		CharacterRolled.ViewportFrameOutline.Size = UDim2.new(0,0,0,0)
+		
+		TweenService:Create(ViewportFrame, TweenInfo.new(1, Enum.EasingStyle.Back), {Size = UDim2.new(1.5, 0, 1.5 ,0)}):Play()
+		TweenService:Create(CharacterRolled.ViewportFrameOutline, TweenInfo.new(1, Enum.EasingStyle.Back), {Size = UDim2.new(1.6, 0, 1.6 ,0)}):Play()
+		
+		for i, gradient in ipairs(CharacterRolled.Title:GetChildren()) do
+			if gradient:IsA("UIGradient") then
+				gradient.Enabled = false
+			end
+		end
+
+		for i, gradient in ipairs(CharacterRolled.Rarity:GetChildren()) do
+			if gradient:IsA("UIGradient") then
+				gradient.Enabled = false
+			end
+		end
+
+		if CharacterRolled.Title:FindFirstChild(ChosenUnit.Name.." Gradient") then
+			CharacterRolled.Title[ChosenUnit.Name.." Gradient"].Enabled = true
+		end
+		
+		if CharacterInfo[ChosenUnit.Name].Rarity == "Special" then
+			CharacterRolled.Glow1.ImageColor3 = Color3.fromRGB(85, 255, 255)
+			CharacterRolled.Glow2.ImageColor3 = Color3.fromRGB(85, 255, 255)
+		else
+			CharacterRolled.Glow1.ImageColor3 = Color3.fromRGB(255, 255, 255)
+			CharacterRolled.Glow2.ImageColor3 = Color3.fromRGB(255, 255, 255)
+			
+		end
+
+		CharacterRolled.Title.Text = ChosenUnit.Name
+		CharacterRolled.Rarity.Text = CharacterInfo[ChosenUnit.Name].Rarity
+		CharacterRolled.Rarity[CharacterInfo[ChosenUnit.Name].Rarity.."Gradient"].Enabled = true
+		
+		local Amount = 0
+
+		local PlayerData = Functions.GetData:InvokeServer()
+
+		if table.find(PlayerData["OwnedNyantsubu"], ChosenUnit.Name) then
+			script.Character:Play()
+			
+			CharacterRolled.Unlocked.Visible = false
+
+			local AmountRNG = math.random(1, 10000)
+			local ChosenAmount = nil
+			
+			for i, AmountChance in pairs(EggContents["Amount Chance"]) do
+				if AmountRNG <= AmountChance.Chance then
+					if not ChosenAmount then
+						ChosenAmount = AmountChance
+					elseif AmountChance.Chance < ChosenAmount.Chance then
+						ChosenAmount = AmountChance
+					end
+				end
+			end
+			
+			Amount = ChosenAmount.Amount
+		else
+			script.NewCharacter:Play()
+			Amount = 1
+			CharacterRolled.Unlocked.Visible = true
+		end
+
+		if Amount > 1 then
+			CharacterRolled.Amount.Visible = true
+			CharacterRolled.Amount.Text = "X"..Amount
+		else
+			CharacterRolled.Amount.Visible = false
+		end
+
+		for i=1, Amount do
+			local PlayerData = Functions.GetData:InvokeServer()
+
+			if table.find(PlayerData["OwnedNyantsubu"], ChosenUnit.Name) then
+				Events.AddData:FireServer("Inventory", ChosenUnit.Name)
+			else
+				Events.AddData:FireServer("OwnedNyantsubu", ChosenUnit.Name)
+				Events.SetLevel:FireServer(ChosenUnit.Name, 1)
+			end
+		end
+
+		TweenService:Create(Flash, TweenInfo.new(0.5, Enum.EasingStyle.Linear), {Transparency = 1}):Play()
+		task.wait(3)
+		CharacterRolled.Visible = false
+		Shop.Visible = true
+		Egg.Size = UDim2.new(1,0,1,0)
+		Egg.ImageTransparency = 0
+		ChosenUnit:Destroy()
+		Outline:Destroy()
+		ChosenUnit = false
+		OpenningEgg = false
+		UpdateMoneyUI()
+	end
+end
+
+local function LoadUnitInfo(unit)
+	local Data = Functions.GetData:InvokeServer()
+	SelectedUnit = unit
+		
+	for i, model in ipairs(Inventory.UnitInfo.ViewPorts.Image:GetChildren()) do
+		model:Destroy()
+	end
+	for i, model in ipairs(Inventory.UnitInfo.ViewPorts.ImageOutline:GetChildren()) do
+		model:Destroy()
+	end
+
+	local Image = script.Units:FindFirstChild(unit):Clone()
+	Image.Parent = Inventory.UnitInfo.ViewPorts.Image
+
+	local ImageOutline = script.Units:FindFirstChild(unit):Clone()
+	ImageOutline.Parent = Inventory.UnitInfo.ViewPorts.ImageOutline
+
+	Inventory.UnitInfo.UnitName.Text = unit
+	Inventory.UnitInfo.Cost.Text = CharacterInfo[unit].Cost.."$"
+	Inventory.UnitInfo.Level.Text = "lvl."..Data["NyantsubuLevel"][unit]
+	Inventory.UnitInfo.Description.Text = CharacterInfo[unit].Description
+	Inventory.UnitInfo.Upgrade.Button.Text = "UPGRADE ("..CharacterInfo[unit].UpgradeCost * Data["NyantsubuLevel"][unit]..")"
+	Inventory.UnitInfo.ViewPorts.Attributes.Text = "<font color='"..AttributeColours[CharacterInfo[unit].Rarity].."'>"..CharacterInfo[unit].Rarity.."</font> · <font color='"..AttributeColours[CharacterInfo[unit].UnitType1].."'>"..CharacterInfo[unit].UnitType1.."</font>"
+	
+	if CharacterInfo[unit].Rarity == "Special" then
+		Inventory.UnitInfo.ViewPorts.UIStroke.Color = Color3.fromRGB(0, 255, 255)
+		Inventory.UnitInfo.ViewPorts.Equip.Border.Color = Color3.fromRGB(0, 255, 255)
+		Inventory.UnitInfo.UIStroke.Color = Color3.fromRGB(0, 255, 255)
+	else
+		Inventory.UnitInfo.ViewPorts.UIStroke.Color = Color3.fromRGB(255, 255, 255)
+		Inventory.UnitInfo.ViewPorts.Equip.Border.Color = Color3.fromRGB(255, 255, 255)
+		Inventory.UnitInfo.UIStroke.Color = Color3.fromRGB(255, 255, 255)
+	end
+
+	if table.find(Data["SelectedNyantsubu"], unit) then
+		Inventory.UnitInfo.ViewPorts.Equip.Text = "Unequip"
+		Inventory.UnitInfo.ViewPorts.Equip.EquipGradient.Enabled = false
+		Inventory.UnitInfo.ViewPorts.Equip.UnequipGradient.Enabled = true
+	else
+		Inventory.UnitInfo.ViewPorts.Equip.Text = "Equip"
+		Inventory.UnitInfo.ViewPorts.Equip.EquipGradient.Enabled = true
+		Inventory.UnitInfo.ViewPorts.Equip.UnequipGradient.Enabled = false
+	end
+	
+	local AmountOfUnit = 0
+
+	for i, card in ipairs(Data["Inventory"]) do
+		if card == unit then
+			AmountOfUnit += 1
+		end
+	end
+	
+	if Data["NyantsubuLevel"][unit] >= 10 then
+		Inventory.UnitInfo.Upgrade.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+		Inventory.UnitInfo.Upgrade.Button.Interactable = false
+		Inventory.UnitInfo.Upgrade.Button.Text = "MAX"
+	elseif AmountOfUnit >= CharacterInfo[unit].CardsNeeded * Data["NyantsubuLevel"][unit] and Data.Cash >= CharacterInfo[unit].UpgradeCost * Data["NyantsubuLevel"][unit] then
+		Inventory.UnitInfo.Upgrade.BackgroundColor3 = Color3.fromRGB(85, 255, 0)
+		Inventory.UnitInfo.Upgrade.Button.Interactable = true
+	else
+		Inventory.UnitInfo.Upgrade.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+		Inventory.UnitInfo.Upgrade.Button.Interactable = false
+	end
+	
+	for i, stat in ipairs(Inventory.UnitInfo.Stats:GetChildren()) do
+		if stat.Name == "Damage" then
+			local TrueStat = CharacterInfo[unit][stat.Name]
+			
+			for i=2, Data["NyantsubuLevel"][unit] do
+				TrueStat *= 1.1
+			end
+			
+			stat.Text = stat.Name..": "..math.round(TrueStat)
+		elseif stat.Name == "HP" then
+			local TrueStat = CharacterInfo[unit][stat.Name]
+
+			for i=2, Data["NyantsubuLevel"][unit] do
+				TrueStat *= 1.05
+			end
+
+			stat.Text = stat.Name..": "..math.round(TrueStat)
+		elseif stat.Name == "AOE" and CharacterInfo[unit][stat.Name] == 0 then
+			stat.Text = "Single Target"
+		else
+			
+			stat.Text = stat.Name..": "..CharacterInfo[unit][stat.Name]
+		end
+	end
+	
+	Inventory.UnitInfo.Size = UDim2.new(0, 0, 0.85, 0)
+	Inventory.UnitInfo.Visible = true
+	
+	TweenService:Create(Inventory.Units, TweenInfo.new(0.5), {Position = UDim2.new(0, 0, 0.15, 0)}):Play()
+	TweenService:Create(Inventory.UnitInfo, TweenInfo.new(0.5), {Size = UDim2.new(0.35, 0, 0.85, 0)}):Play()
+end
+
+local function LoadEnemyInfo(Enemy)
+	local Data = Functions.GetData:InvokeServer()
+	
+	TweenService:Create(EnemyIndex.EnemyInfo.FlashFrame.UpperFlash, TweenInfo.new(0.15), {Size = UDim2.new(1, 0, 0.5, 0)}):Play()
+	TweenService:Create(EnemyIndex.EnemyInfo.FlashFrame.LowerFlash, TweenInfo.new(0.15), {Size = UDim2.new(1, 0, 0.5, 0)}):Play()
+
+	wait(0.3)
+	
+	for i, model in ipairs(EnemyIndex.EnemyInfo.ViewPorts.Image:GetChildren()) do
+		model:Destroy()
+	end
+
+	for i, model in ipairs(EnemyIndex.EnemyInfo.ViewPorts.ImageOutline:GetChildren()) do
+		model:Destroy()
+	end
+
+	local Image = script.Enemies:FindFirstChild(Enemy):Clone()
+	Image.Parent = EnemyIndex.EnemyInfo.ViewPorts.Image
+
+	local ImageOutline = script.Enemies:FindFirstChild(Enemy):Clone()
+	ImageOutline.Parent = EnemyIndex.EnemyInfo.ViewPorts.ImageOutline
+
+	if table.find(Data["DiscoveredEnemies"], Enemy) then
+		EnemyIndex.EnemyInfo.ViewPorts.Image.ImageTransparency = 0
+
+		EnemyIndex.EnemyInfo.EnemyName.Text = Enemy
+		EnemyIndex.EnemyInfo.Description.Text = EnemyInfo[Enemy].Description
+
+		for i, stat in ipairs(EnemyIndex.EnemyInfo.Stats:GetChildren()) do
+			stat.Text = stat.Name..": "..EnemyInfo[Enemy][stat.Name]
+			if stat.Name == "AOE" and EnemyInfo[Enemy][stat.Name] == 0 then
+				stat.Text = "Single Target"
+			end
+		end
+	else
+		EnemyIndex.EnemyInfo.ViewPorts.Image.ImageTransparency = 1
+
+		EnemyIndex.EnemyInfo.EnemyName.Text = ""
+		for i=1, #Enemy do
+			EnemyIndex.EnemyInfo.EnemyName.Text = EnemyIndex.EnemyInfo.EnemyName.Text.."?"
+		end
+
+		EnemyIndex.EnemyInfo.Description.Text = "Discover this enemy to find out its origin..."
+
+		for i, stat in ipairs(EnemyIndex.EnemyInfo.Stats:GetChildren()) do
+			stat.Text = stat.Name..": ??"
+		end
+	end
+			
+	TweenService:Create(EnemyIndex.EnemyInfo.FlashFrame.UpperFlash, TweenInfo.new(0.15), {Size = UDim2.new(1, 0, 0, 0)}):Play()
+	TweenService:Create(EnemyIndex.EnemyInfo.FlashFrame.LowerFlash, TweenInfo.new(0.15), {Size = UDim2.new(1, 0, 0, 0)}):Play()
+	
+	wait(0.15)
+	
+	EnemyButtonCooldown = false
+end
+
+local function OpenInventory()
+	if UIOpen then return end
+	UIOpen = true
+	MainUI.Visible = false
+	
+	local Data = Functions.GetData:InvokeServer()
+	
+	for i, UI in ipairs(Inventory.Units:GetChildren()) do
+		if UI.Name == "Padding" then else
+			UI:Destroy()
+		end
+	end
+		
+	for i, unit in ipairs(Data["OwnedNyantsubu"]) do
+		if #AttributeFilter + #RarityFilter == 0 or (table.find(AttributeFilter, CharacterInfo[unit].UnitType1) and (table.find(RarityFilter, CharacterInfo[unit].Rarity) or #RarityFilter == 0)) or (table.find(RarityFilter, CharacterInfo[unit].Rarity) and #AttributeFilter == 0) then
+			local UnitUI = script.UnitTemplate:Clone()
+			UnitUI.Parent = Inventory.Units
+			UnitUI.Name = unit
+
+			UnitUI.Title.Text = unit
+			UnitUI.LayoutOrder = CharacterInfo[unit].Cost
+
+			if CharacterInfo[unit].Rarity == "Special" then
+				UnitUI.LayoutOrder += 1000
+				UnitUI.UIStroke.Color = Color3.fromRGB(0, 255, 255)
+				UnitUI.Levelbar.UIStroke.Color = Color3.fromRGB(0, 255, 255)
+			end
+			
+			if table.find(Data["SelectedNyantsubu"], unit) then
+				UnitUI.EquipFade.Visible = true
+			else
+				UnitUI.EquipFade.Visible = false
+			end
+
+			local UnitImage = script.Units:FindFirstChild(unit):Clone()
+			UnitImage.Parent = UnitUI.ViewPorts.Image
+
+			local UnitImageOutline = script.Units:FindFirstChild(unit):Clone()
+			UnitImageOutline.Parent = UnitUI.ViewPorts.ImageOutline
+
+			local AmountOfUnit = 0
+
+			for i, card in ipairs(Data["Inventory"]) do
+				if card == unit then
+					AmountOfUnit += 1
+				end
+			end
+
+			UnitUI.Levelbar.Amount.Text = AmountOfUnit.."/"..CharacterInfo[unit].CardsNeeded * Data["NyantsubuLevel"][unit]
+			UnitUI.Levelbar.Progressbar.Bar.Size = UDim2.new(AmountOfUnit/(CharacterInfo[unit].CardsNeeded * Data["NyantsubuLevel"][unit]), 0, 1, 0)
+
+			UnitUI.MouseEnter:Connect(function()
+				script.Hover:Play()
+				TweenService:Create(UnitUI, TweenInfo.new(0.25), {Size = UDim2.new(0.17, 0, 0.21, 0)}):Play()
+			end)
+
+			UnitUI.MouseLeave:Connect(function()
+				TweenService:Create(UnitUI, TweenInfo.new(0.25), {Size = UDim2.new(0.16, 0, 0.2, 0)}):Play()
+			end)
+
+			UnitUI.Button.Activated:Connect(function()
+				script.Press:Play()
+				LoadUnitInfo(unit)
+			end)	
+		end
+	end
+	
+	Inventory.Visible = true
+end
+
+local function CloseInventory()
+	UIOpen = false
+	SelectedUnit = nil
+
+	Inventory.Visible = false
+	Inventory.UnitInfo.Visible = false
+	Inventory.Units.Position = UDim2.new(0.175, 0, 0.15, 0)
+	MainUI.Visible = true
+
+	for i, UI in ipairs(Inventory.Units:GetChildren()) do
+		if UI.Name == "Padding" then else
+			UI:Destroy()
+		end
+	end
+end
+
+local function OpenShop()
+	if UIOpen then return end
+	
+	UIOpen = true
+
+	Inventory.Visible = false
+	MainUI.Visible = false
+	ShopTrigger.Enabled = false
+
+	Players.LocalPlayer.Character:FindFirstChild("Humanoid").WalkSpeed = 0
+
+	local NPC = script.NPCs.NyantsubuMerchant:Clone()
+	NPC.Parent = Dialogue.ViewportFrame
+
+	local NPCoutline = script.NPCs.NyantsubuMerchant:Clone()
+	NPCoutline.Parent = Dialogue.ViewportFrameOutline
+	
+	Dialogue.NPCname.Text = "Nyantsubu Merchant"
+	
+	Dialogue.Visible = true
+	Dialogue.Speach.Text = "Hey! You looking for a new cute pet? Well I got just the thing!"
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.004)
+		end
+	end
+	
+	if SkipDialogue == false then
+		wait(2)
+	end
+	SkipDialogue = false
+	
+	Dialogue.Speach.Text = "Check out these cool eggs with a mysterious Nyantsubu inside! They might be useful..."
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.004)
+		end
+	end
+
+	if SkipDialogue == false then
+		wait(2)
+	end
+	SkipDialogue = false
+
+	Shop.Visible = true
+	Dialogue.Visible = false
+	NPC:Destroy()
+	NPCoutline:Destroy()
+end
+
+local function OpenUpgrades()
+	if UIOpen then return end
+
+	UIOpen = true
+
+	Inventory.Visible = false
+	MainUI.Visible = false
+	UpgradeTrigger.Enabled = false
+
+	Players.LocalPlayer.Character:FindFirstChild("Humanoid").WalkSpeed = 0
+
+	local NPC = script.NPCs.NyanEngineer:Clone()
+	NPC.Parent = Dialogue.ViewportFrame
+
+	local NPCoutline = script.NPCs.NyanEngineer:Clone()
+	NPCoutline.Parent = Dialogue.ViewportFrameOutline
+	
+	Dialogue.NPCname.Text = "Nyan Engineer"
+
+	Dialogue.Visible = true
+	Dialogue.Speach.Text = "Are those wreched monsters causing you trouble?"
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.004)
+		end
+	end
+
+	if SkipDialogue == false then
+		wait(2)
+	end
+	SkipDialogue = false
+
+	Dialogue.Speach.Text = "Don't worry! I can enhance your weak gadgets to be strong enough to take on ANYTHING! However, it will cost a pretty penny..."
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.004)
+		end
+	end
+
+	if SkipDialogue == false then
+		wait(2)
+	end
+	SkipDialogue = false
+
+	Upgrades.Visible = true
+	Dialogue.Visible = false
+	NPC:Destroy()
+	NPCoutline:Destroy()
+end
+
+local function OpenIndex()
+	if UIOpen then return end
+
+	UIOpen = true
+
+	Inventory.Visible = false
+	MainUI.Visible = false
+	IndexTrigger.Enabled = false
+	
+	Players.LocalPlayer.Character:FindFirstChild("Humanoid").WalkSpeed = 0
+	
+	local NPC = script.NPCs.Nerdtsubu:Clone()
+	NPC.Parent = Dialogue.ViewportFrame
+
+	local NPCoutline = script.NPCs.Nerdtsubu:Clone()
+	NPCoutline.Parent = Dialogue.ViewportFrameOutline
+	
+	Dialogue.NPCname.Text = "Nerdtsubu"
+
+	Dialogue.Visible = true
+	Dialogue.Speach.Text = "Hey, ever wondered what's the deal with those monsters terrorising us? Me to!"
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.004)
+		end
+	end
+
+	if SkipDialogue == false then
+		wait(2)
+	end
+	SkipDialogue = false
+
+	Dialogue.Speach.Text = "That's why I have decided to research these odd beings. If you ever wanna know what creature you have encountered, come to me for information! Please..."
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.004)
+		end
+	end
+
+	if SkipDialogue == false then
+		wait(2)
+	end
+	SkipDialogue = false
+
+	EnemyIndex.Visible = true
+	Dialogue.Visible = false
+	NPC:Destroy()
+	NPCoutline:Destroy()
+end
+
+Dialogue.SkipButton.Activated:Connect(function()
+	script.Press:Play()
+	SkipDialogue = true
+end)
+
+ShopItems.BasicEgg.Purchase.Button.Activated:Connect(function()
+	script.Press:Play()
+	OpenEgg(50, EggImages.BasicEgg.Image, BasicEggContents, 3)
+end)
+
+ShopItems.BigEgg.Purchase.Button.Activated:Connect(function()
+	script.Press:Play()
+	OpenEgg(125, EggImages.BigEgg.Image, BigEggContents, 7)
+end)
+
+ShopItems.ShinyEgg.Purchase.Button.Activated:Connect(function()
+	script.Press:Play()
+	OpenEgg(200, EggImages.ShinyEgg.Image, ShinyEggContents, 4)
+end)
+
+ShopItems.ElementalEgg.Purchase.Button.Activated:Connect(function()
+	script.Press:Play()
+	OpenEgg(375, EggImages.ElementalEgg.Image, ElementalEggContents, 5)
+end)
+
+ShopItems.GiganticEgg.Purchase.Button.Activated:Connect(function()
+	script.Press:Play()
+	OpenEgg(500, EggImages.GiganticEgg.Image, GiganticEggContents, 10)
+end)
+
+Egg.Button.Activated:Connect(function()
+	Egg.Click.Visible = false
+	
+	if OpenningEgg then return end
+	Clicks += 1
+	wait()
+	if OpenningEgg then return end
+	
+	InEggTween = true
+	SwayRight:Pause()
+	SwayLeft:Pause()
+	
+	if Direction == "Left" then
+		CrackLeft:Pause()
+		CrackRight:Pause()
+		ReturnCrack:Pause()
+		InEggTween = true
+		Direction = "Right"
+		CrackLeft:Play()
+		wait(0.075)
+		ReturnCrack:Play()
+
+		ReturnCrack.Completed:Connect(function()
+			InEggTween = false
+		end)
+	else
+		CrackLeft:Pause()
+		CrackRight:Pause()
+		ReturnCrack:Pause()
+		InEggTween = true
+		Direction = "Left"
+		CrackRight:Play()
+		wait(0.075)
+		ReturnCrack:Play()
+		
+		ReturnCrack.Completed:Connect(function()
+			InEggTween = false
+		end)
+	end
+end)
+
+ShopTrigger.Triggered:Connect(OpenShop)
+UpgradeTrigger.Triggered:Connect(OpenUpgrades)
+IndexTrigger.Triggered:Connect(OpenIndex)
+
+MainUI.Buttons.ShopButton.Button.Activated:Connect(function()
+	script.Press:Play()
+	Events.Teleport:FireServer(workspace.Shop.TeleportTo.CFrame)
+	OpenShop()
+end)
+
+MainUI.Buttons.ShopButton.MouseEnter:Connect(function()
+	HoverIcon(MainUI.Buttons.ShopButton)
+end)
+
+MainUI.Buttons.ShopButton.MouseLeave:Connect(function()
+	NotHoverIcon(MainUI.Buttons.ShopButton)
+end)
+
+MainUI.Buttons.UpgradeButton.Button.Activated:Connect(function()
+	script.Press:Play()
+	Events.Teleport:FireServer(workspace.Upgrades.TeleportTo.CFrame)
+	OpenUpgrades()
+end)
+
+MainUI.Buttons.UpgradeButton.MouseEnter:Connect(function()
+	HoverIcon(MainUI.Buttons.UpgradeButton)
+end)
+
+MainUI.Buttons.UpgradeButton.MouseLeave:Connect(function()
+	NotHoverIcon(MainUI.Buttons.UpgradeButton)
+end)
+
+MainUI.Buttons.IndexButton.Button.Activated:Connect(function()
+	script.Press:Play()
+	Events.Teleport:FireServer(workspace.Library.TeleportTo.CFrame)
+	OpenIndex()
+end)
+
+MainUI.Buttons.IndexButton.MouseEnter:Connect(function()
+	HoverIcon(MainUI.Buttons.IndexButton)
+end)
+
+MainUI.Buttons.IndexButton.MouseLeave:Connect(function()
+	NotHoverIcon(MainUI.Buttons.IndexButton)
+end)
+
+Shop.Exit.Button.Activated:Connect(function()
+	script.Press:Play()
+	
+	local NPC = script.NPCs.NyantsubuMerchant:Clone()
+	NPC.Parent = Dialogue.ViewportFrame
+
+	local NPCoutline = script.NPCs.NyantsubuMerchant:Clone()
+	NPCoutline.Parent = Dialogue.ViewportFrameOutline
+	
+	Shop.Visible = false
+	Dialogue.Visible = true
+	Dialogue.Speach.Text = "Good luck "..Players.LocalPlayer.Name.."! I'll see you around..."
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.01)
+		end
+	end
+
+	if SkipDialogue == false then
+		wait(1.5)
+	end
+	SkipDialogue = false
+
+	Dialogue.Visible = false
+	ShopTrigger.Enabled = true
+	
+	Players.LocalPlayer.Character:FindFirstChild("Humanoid").WalkSpeed = 16
+	
+	UIOpen = false
+	MainUI.Visible = true
+	NPC:Destroy()
+	NPCoutline:Destroy()
+end)
+
+Upgrades.Exit.Button.Activated:Connect(function()
+	script.Press:Play()
+	
+	local NPC = script.NPCs.NyanEngineer:Clone()
+	NPC.Parent = Dialogue.ViewportFrame
+
+	local NPCoutline = script.NPCs.NyanEngineer:Clone()
+	NPCoutline.Parent = Dialogue.ViewportFrameOutline
+
+	Upgrades.Visible = false
+	Dialogue.Visible = true
+	Dialogue.Speach.Text = "Now those vile creatures will know the true power of "..Players.LocalPlayer.Name.."! Good luck..."
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.01)
+		end
+	end
+	
+	if SkipDialogue == false then
+		wait(1.5)
+	end
+	SkipDialogue = false
+
+	Dialogue.Visible = false
+	UpgradeTrigger.Enabled = true
+
+	Players.LocalPlayer.Character:FindFirstChild("Humanoid").WalkSpeed = 16
+
+	UIOpen = false
+	MainUI.Visible = true
+	NPC:Destroy()
+	NPCoutline:Destroy()
+end)
+
+Inventory.Exit.Button.Activated:Connect(function()
+	script.Press:Play()
+	CloseInventory()
+end)
+
+Inventory.UnitInfo.Toggle.Button.Activated:Connect(function()
+	script.Press:Play()
+	
+	if Inventory.UnitInfo.Description.Visible == true then
+		Inventory.UnitInfo.Description.Visible = false
+		Inventory.UnitInfo.Toggle.Button.Text = "INFO"
+		
+		for i, stat in ipairs(Inventory.UnitInfo.Stats:GetChildren()) do
+			stat.Visible = true
+		end
+	else
+		Inventory.UnitInfo.Description.Visible = true
+		Inventory.UnitInfo.Toggle.Button.Text = "STATS"
+
+		for i, stat in ipairs(Inventory.UnitInfo.Stats:GetChildren()) do
+			stat.Visible = false
+		end
+	end
+end)
+
+Inventory.UnitInfo.ViewPorts.Equip.Activated:Connect(function()	
+	if SelectedUnit then
+		local Data = Functions.GetData:InvokeServer()
+		
+		if table.find(Data["SelectedNyantsubu"], SelectedUnit) then
+			script.Unequip:Play()
+			
+			Events.RemoveData:FireServer("SelectedNyantsubu", SelectedUnit)
+			Inventory.UnitInfo.ViewPorts.Equip.Text = "Equip"
+			Inventory.UnitInfo.ViewPorts.Equip.EquipGradient.Enabled = true
+			Inventory.UnitInfo.ViewPorts.Equip.UnequipGradient.Enabled = false
+		else
+			script.Equip:Play()
+			Events.AddData:FireServer("SelectedNyantsubu", SelectedUnit)
+			Inventory.UnitInfo.ViewPorts.Equip.Text = "Unequip"
+			Inventory.UnitInfo.ViewPorts.Equip.EquipGradient.Enabled = false
+			Inventory.UnitInfo.ViewPorts.Equip.UnequipGradient.Enabled = true
+		end
+		wait()
+		UIOpen = false
+		OpenInventory()
+	end
+end)
+
+Inventory.UnitInfo.Upgrade.Button.Activated:Connect(function()
+	script.Upgrade:Play()
+	
+	if SelectedUnit and UpgradeCooldown == false then
+		UpgradeCooldown = true
+		
+		local Data = Functions.GetData:InvokeServer()
+		
+		Events.SetLevel:FireServer(SelectedUnit, Data["NyantsubuLevel"][SelectedUnit] + 1)
+		Events.ChangeMoney:FireServer(-(CharacterInfo[SelectedUnit].UpgradeCost * Data["NyantsubuLevel"][SelectedUnit]))
+		
+		for i=1, CharacterInfo[SelectedUnit].CardsNeeded * Data["NyantsubuLevel"][SelectedUnit] do
+			Events.RemoveData:FireServer("Inventory", SelectedUnit)
+		end
+		
+		wait()
+		
+		UIOpen = false
+		
+		UpdateMoneyUI()
+		OpenInventory()
+		LoadUnitInfo(SelectedUnit)
+		
+		UpgradeCooldown = false
+	end
+end)
+
+Inventory.UnequippAll.Button.Activated:Connect(function()
+	script.Unequip:Play()
+	Events.UnequipAll:FireServer()
+	wait()
+	if SelectedUnit then
+		UIOpen = false
+		OpenInventory()
+		LoadUnitInfo(SelectedUnit)
+	end
+end)
+
+Inventory.Filter.Button.Activated:Connect(function()
+	script.Press:Play()
+	
+	--[[ListPosition += 1
+	if ListPosition > #ListOrder then
+		ListPosition = 1
+	end
+	
+	for i=1, #ListOrder do
+		Inventory.Filter[ListOrder[i].."Gradient"].Enabled = false
+	end
+	Inventory.Filter[ListOrder[ListPosition].."Gradient"].Enabled = true
+	
+	Inventory.Filter.Button.Text = ListOrder[ListPosition] --]]
+	
+	if Inventory.Filter.Options.Visible == true then
+		TweenService:Create(Inventory.Filter.Options, TweenInfo.new(0.25), {Size = UDim2.new(1.25, 0, 0, 0)}):Play()
+		wait(0.5)
+		Inventory.Filter.Options.Visible = false
+	else
+		Inventory.Filter.Options.Visible = true
+		Inventory.Filter.Options.Size = UDim2.new(1.25, 0, 0, 0)
+		TweenService:Create(Inventory.Filter.Options, TweenInfo.new(0.5), {Size = UDim2.new(1.25, 0, 3, 0)}):Play()
+	end
+end)
+
+Events.ShowExitButton.OnClientEvent:Connect(function()
+	Shop.Visible = false
+	Exit.Visible = true
+end)
+
+Exit.Button.Activated:Connect(function()
+	script.Press:Play()
+	Exit.Visible = false
+	Events.LeaveParty:FireServer()
+end)
+
+MainUI.Buttons.InventoryButton.MouseEnter:Connect(function()
+	HoverIcon(MainUI.Buttons.InventoryButton)
+end)
+
+MainUI.Buttons.InventoryButton.MouseLeave:Connect(function()
+	NotHoverIcon(MainUI.Buttons.InventoryButton)
+end)
+
+MainUI.Buttons.InventoryButton.Button.Activated:Connect(function()
+	script.Press:Play()
+	OpenInventory()
+end)
+
+Upgrades.Items.Efficiency.Upgrade.Button.Activated:Connect(function()
+	local Data = Functions.GetData:InvokeServer()
+	
+	local Amount = 1
+	
+	for i, Upgrade in ipairs(Data["Upgrades"]) do
+		if Upgrade == "Efficiency" then
+			Amount += 1
+		end
+	end
+	
+	if Data.Cash >= 250 + (250 * math.pow(2,Amount-1)) then
+		Events.AddData:FireServer("Upgrades", "Efficiency")
+		Events.ChangeMoney:FireServer(-(250 + (250 * math.pow(2,Amount-1))))
+		script.Upgrade:Play()
+		wait()
+	else
+		script.Decline:Play()
+	end
+	
+	UpdateUpgradeUI("Efficiency")
+	UpdateMoneyUI()
+end)
+
+Upgrades.Items.Recovery.Upgrade.Button.Activated:Connect(function()
+	local Data = Functions.GetData:InvokeServer()
+
+	local Amount = 1
+
+	for i, Upgrade in ipairs(Data["Upgrades"]) do
+		if Upgrade == "Recovery" then
+			Amount += 1
+		end
+	end
+
+	if Data.Cash >= 250 + (250 * math.pow(2,Amount-1)) then
+		Events.AddData:FireServer("Upgrades", "Recovery")
+		Events.ChangeMoney:FireServer(-(250 + (250 * math.pow(2,Amount-1))))
+		script.Upgrade:Play()
+		wait()
+	else
+		script.Decline:Play()
+	end
+
+	UpdateUpgradeUI("Recovery")
+	UpdateMoneyUI()
+end)
+
+Upgrades.Items.Bounty.Upgrade.Button.Activated:Connect(function()
+	local Data = Functions.GetData:InvokeServer()
+
+	local Amount = 1
+
+	for i, Upgrade in ipairs(Data["Upgrades"]) do
+		if Upgrade == "Bounty" then
+			Amount += 1
+		end
+	end
+
+	if Data.Cash >= 250 + (250 * math.pow(2,Amount-1)) then
+		Events.AddData:FireServer("Upgrades", "Bounty")
+		Events.ChangeMoney:FireServer(-(250 + (250 * math.pow(2,Amount-1))))
+		script.Upgrade:Play()
+		wait()
+	else
+		script.Decline:Play()
+	end
+
+	UpdateUpgradeUI("Bounty")
+	UpdateMoneyUI()
+end)
+
+UserInputService.InputBegan:Connect(function(input, GameProc)
+	if GameProc then return end
+	
+	if input.KeyCode == Enum.KeyCode.E then
+		if Inventory.Visible == false then
+			OpenInventory()
+		else
+			CloseInventory()
+		end
+	end
+end)
+
+local Data = Functions.GetData:InvokeServer()
+
+EnemyIndex.Exit.Button.Activated:Connect(function()
+	script.Press:Play()
+	
+	local NPC = script.NPCs.Nerdtsubu:Clone()
+	NPC.Parent = Dialogue.ViewportFrame
+
+	local NPCoutline = script.NPCs.Nerdtsubu:Clone()
+	NPCoutline.Parent = Dialogue.ViewportFrameOutline
+
+	EnemyIndex.Visible = false
+	Dialogue.Visible = true
+	Dialogue.Speach.Text = "Hope I was usefull to you "..Players.LocalPlayer.Name.."! or mabye I wasn't...  Anyways good luck!"
+	Dialogue.Speach.MaxVisibleGraphemes = 0
+
+	for i=1, #Dialogue.Speach.Text do
+		if SkipDialogue == false then
+			Dialogue.Speach.MaxVisibleGraphemes = i
+			script.Click:Play()
+			wait(0.01)
+		end
+	end
+	
+	if SkipDialogue == false then
+		wait(1.5)
+	end
+	SkipDialogue = false
+
+	Dialogue.Visible = false
+	IndexTrigger.Enabled = true
+
+	Players.LocalPlayer.Character:FindFirstChild("Humanoid").WalkSpeed = 16
+
+	UIOpen = false
+	MainUI.Visible = true
+	NPC:Destroy()
+	NPCoutline:Destroy()
+end)
+
+EnemyIndex.EnemyInfo.Toggle.Button.Activated:Connect(function()
+	script.Press:Play()
+
+	if EnemyIndex.EnemyInfo.Description.Visible == true then
+		EnemyIndex.EnemyInfo.Description.Visible = false
+		EnemyIndex.EnemyInfo.Toggle.Button.Text = "INFO"
+
+		for i, stat in ipairs(EnemyIndex.EnemyInfo.Stats:GetChildren()) do
+			stat.Visible = true
+		end
+	else
+		EnemyIndex.EnemyInfo.Description.Visible = true
+		EnemyIndex.EnemyInfo.Toggle.Button.Text = "STATS"
+
+		for i, stat in ipairs(EnemyIndex.EnemyInfo.Stats:GetChildren()) do
+			stat.Visible = false
+		end
+	end
+end)
+
+for i, Enemy in ipairs(Data["DiscoveredEnemies"]) do
+	EnemyIndex.Enemies[Enemy].ViewPorts.Image.ImageTransparency = 0
+	EnemyIndex.Enemies[Enemy].Title.Text = Enemy
+end
+
+for i, EnemyButton in ipairs(EnemyIndex.Enemies:GetChildren()) do
+	if EnemyButton.Name == "Padding" then else
+		EnemyButton.MouseEnter:Connect(function()
+			script.Hover:Play()
+			TweenService:Create(EnemyButton, TweenInfo.new(0.25), {Size = UDim2.new(0.19, 0, 0.21, 0)}):Play()
+		end)
+		
+		EnemyButton.MouseLeave:Connect(function()
+			TweenService:Create(EnemyButton, TweenInfo.new(0.25), {Size = UDim2.new(0.18, 0, 0.2, 0)}):Play()
+		end)
+		
+		EnemyButton.Button.Activated:Connect(function()
+			script.Press:Play()
+			
+			if EnemyButtonCooldown == false then
+				EnemyButtonCooldown = true
+				LoadEnemyInfo(EnemyButton.Name)
+			end
+		end)
+	end
+end
+
+for i, Filter in ipairs(Inventory.Filter.Options:GetChildren()) do
+	if Filter:IsA("TextButton") then
+		Filter.Activated:Connect(function()
+			script.Press:Play()
+			
+			if Filter.Name == "All" then
+				AttributeFilter = {}
+				RarityFilter = {}
+				
+				for i, filter in ipairs(Inventory.Filter.Options:GetChildren()) do
+					if filter:IsA("TextButton") then
+						filter.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+					end
+				end
+				
+			elseif table.find(AttributeFilter, Filter.Name) then
+				table.remove(AttributeFilter, table.find(AttributeFilter, Filter.Name))
+				Filter.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+			elseif table.find(RarityFilter, Filter.Name) then
+				table.remove(RarityFilter, table.find(RarityFilter, Filter.Name))
+				Filter.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+			elseif table.find(Rarities, Filter.Name) then
+				table.insert(RarityFilter, Filter.Name)
+				Filter.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+			else table.find(Attributes, Filter.Name)
+				table.insert(AttributeFilter, Filter.Name)
+				Filter.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+			end
+			
+			for i, Gradient in ipairs(Inventory.Filter:GetChildren()) do
+				if Gradient:IsA("UIGradient") then
+					Gradient.Enabled = false
+				end
+			end
+			
+			if #AttributeFilter == 0 and #RarityFilter == 0 then
+				Inventory.Filter.Button.Text = "All"
+				Inventory.Filter.AllGradient.Enabled = true
+			elseif #AttributeFilter + #RarityFilter > 1 then
+				Inventory.Filter.MixedGradient.Enabled = true
+				Inventory.Filter.Button.Text = "Mixed"
+			elseif #AttributeFilter >= 1 then
+				Inventory.Filter[AttributeFilter[1].."Gradient"].Enabled = true
+				Inventory.Filter.Button.Text = AttributeFilter[1]
+			elseif #RarityFilter >= 1 then
+				Inventory.Filter[RarityFilter[1].."Gradient"].Enabled = true
+				Inventory.Filter.Button.Text = RarityFilter[1]
+			end
+			
+			if #RarityFilter == #Rarities then
+				RarityFilter = {}
+				
+				for i, filter in ipairs(Inventory.Filter.Options:GetChildren()) do
+					if table.find(Rarities, filter.Name) then
+						filter.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+					end
+				end
+			end
+			
+			if #AttributeFilter == #Attributes then
+				AttributeFilter = {}
+				
+				for i, filter in ipairs(Inventory.Filter.Options:GetChildren()) do
+					if table.find(Attributes, filter.Name) then
+						filter.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
+					end
+				end
+			end
+			
+			UIOpen = false
+			OpenInventory()
+		end)
+	end
+end
+
+UpdateMoneyUI()
+UpdateUpgradeUI("Efficiency")
+UpdateUpgradeUI("Recovery")
+UpdateUpgradeUI("Bounty")
+
+while wait() do
+	CharacterRolled.Glow1.Rotation += 1
+	CharacterRolled.Glow2.Rotation += 1
+	Shop.Background.Image.Position = UDim2.new(0.5, Shop.Background.Image.Position.X.Offset + 1, 0.5, Shop.Background.Image.Position.Y.Offset + 1)
+	if Shop.Background.Image.Position.X.Offset >= 410 or Shop.Background.Image.Position.Y.Offset >= 410 then
+		Shop.Background.Image.Position = UDim2.new(0.5, 0, 0.5, 0)
+	end
+	Inventory.Background.Image.Position = UDim2.new(0.5, Inventory.Background.Image.Position.X.Offset + 1, 0.5, Inventory.Background.Image.Position.Y.Offset + 1)
+	if Inventory.Background.Image.Position.X.Offset >= 410 or Inventory.Background.Image.Position.Y.Offset >= 410 then
+		Inventory.Background.Image.Position = UDim2.new(0.5, 0, 0.5, 0)
+	end
+	Upgrades.Background.Image.Position = UDim2.new(0.5, Upgrades.Background.Image.Position.X.Offset + 1, 0.5, Upgrades.Background.Image.Position.Y.Offset + 1)
+	if Upgrades.Background.Image.Position.X.Offset >= 410 or Upgrades.Background.Image.Position.Y.Offset >= 410 then
+		Upgrades.Background.Image.Position = UDim2.new(0.5, 0, 0.5, 0)
+	end
+end
