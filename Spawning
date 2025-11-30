@@ -1,0 +1,498 @@
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+
+local DataBase = DataStoreService:GetDataStore("database")
+
+local Events = ReplicatedStorage.Events
+local Enemies = ReplicatedStorage.Enemies
+local Units = ReplicatedStorage.Units
+
+local Map = workspace:WaitForChild("Map")
+
+local MinEnemySpawnCooldown = 15
+local MaxEnemySpawnCooldown = 20
+local MinSwarmSpawn = 1
+local MaxSwarmSpawn = 1
+local MaxEnemies = 3
+local SpawnAbleEnemies = {Enemies.Zombtsubu}
+
+local Data = {}
+local TestData = {
+	["Cash"] = 0;
+	["Upgrades"] = {"Bounty", "Bounty", "Bounty", "Bounty", "Bounty"};
+	["Inventory"] = {};
+	["DiscoveredEnemies"] = {};
+	["SelectedNyantsubu"] = {"Nyantsubu"};
+	["OwnedNyantsubu"] = {"Nyantsubu"};
+	["NyantsubuLevel"] = {["Nyantsubu"] = 1}
+}
+
+local function LoadData(plr)
+	local Success = nil
+	local PlayerData = nil
+	local Attempt = 1
+
+	repeat
+		Success, PlayerData = pcall(function()
+			return DataBase:GetAsync(plr.UserId)
+		end)
+
+		Attempt += 1
+		task.wait()
+	until Success or Attempt == 3
+
+	if Success then
+		Data[plr.UserId] = PlayerData
+	else
+		plr:Kick("mb yo data is lost g. mb gang just come back in 6 or 7 minutes and we gotchu homie")
+	end
+end
+
+Players.PlayerAdded:Connect(function(plr)
+	LoadData(plr)
+end)
+
+local function SlowDown(Model, Slow, Time)
+	if Model then
+		if Model:FindFirstChild("Humanoid").Health > 0 then
+			Model.Humanoid.WalkSpeed = Model:GetAttribute("Speed")/Slow
+			Model:FindFirstChild("Highlight").FillColor = Color3.fromRGB(85, 255, 255)
+			Model:FindFirstChild("Highlight").FillTransparency = 0.75
+			Model:FindFirstChild("Head"):FindFirstChild("Highlight").FillColor = Color3.fromRGB(85, 255, 255)
+			Model:FindFirstChild("Head"):FindFirstChild("Highlight").FillTransparency = 0.75
+			wait(Time)
+			if Model:FindFirstChild("Humanoid").Health > 0 then
+				Model.Humanoid.WalkSpeed = Model:GetAttribute("Speed")
+				Model:FindFirstChild("Highlight").FillTransparency = 1
+				Model:FindFirstChild("Head"):FindFirstChild("Highlight").FillColor = Color3.fromRGB(85, 255, 255)
+				Model:FindFirstChild("Head"):FindFirstChild("Highlight").FillTransparency = 1
+			end
+		end
+	end
+end
+
+local function Electricity(MainModel, ModelType, Damage, Range, Zapped)
+	local Target = nil
+	local TrueDirection = nil
+	
+	for i, model in ipairs(workspace:FindFirstChild(ModelType):GetChildren()) do
+		if table.find(Zapped, model) then else
+			if model:IsA("Model") then
+				if model:FindFirstChild("Humanoid").Health > 0 then
+					local Distance = MainModel.PrimaryPart.Position - model.PrimaryPart.Position
+					local Size = Distance.Magnitude
+					local Direction = Distance.Unit
+
+					if Size <= Range then
+						Target = model
+						Range = Size
+						TrueDirection = Direction
+					end
+				end
+			end
+		end
+	end
+	
+	if Target then
+		local Bolt = Instance.new("Part")
+		Bolt.Name = "Bolt"
+		Bolt.Parent = workspace
+		Bolt.Anchored = true
+		Bolt.CanCollide = false
+		Bolt.Size = Vector3.new(0.25, 0.25, Range)
+		Bolt.Color = Color3.fromRGB(255, 255, 127)
+		Bolt.Material = Enum.Material.Neon
+		Bolt.CFrame = CFrame.new((MainModel.PrimaryPart.Position + Target.PrimaryPart.Position)/2, Target.PrimaryPart.Position)
+		game.Debris:AddItem(Bolt, 1)
+		TweenService:Create(Bolt, TweenInfo.new(1, Enum.EasingStyle.Linear), {Transparency = 1}):Play()
+		
+		local BoltPostion = RunService.Heartbeat:Connect(function()
+			Bolt.CFrame = CFrame.new((MainModel.PrimaryPart.Position + Target.PrimaryPart.Position)/2, Target.PrimaryPart.Position)
+			Range = (MainModel.PrimaryPart.Position - Target.PrimaryPart.Position).Magnitude
+			Bolt.Size = Vector3.new(0.25, 0.25, Range)
+		end)
+		
+		Target:FindFirstChild("Humanoid").Health -= Damage
+		Target:FindFirstChild("Humanoid").WalkSpeed = 0
+		
+		table.insert(Zapped, Target)
+		
+		if Damage > 1 then
+			coroutine.wrap(Electricity)(Target, ModelType, Damage - 2, 20, Zapped)
+		end
+		
+		task.wait(0.5)
+		
+		if Target and Target:FindFirstChild("Humanoid").Health >= 0 then
+			Target:FindFirstChild("Humanoid").WalkSpeed = Target:GetAttribute("Speed")
+		end
+		
+		task.wait(0.5)
+		
+		BoltPostion:Disconnect()
+	end
+end
+
+local function GetTarget(UnitClone)
+	local SmallestDistance = 999999999999999
+	local Target = nil
+	local Direction = nil
+	
+	if UnitClone then
+		for i, enemy in ipairs(workspace.Enemies:GetChildren()) do
+			if enemy:FindFirstChild("Humanoid").Health > 0 then						
+				local Distance = enemy.PrimaryPart.Position - UnitClone.PrimaryPart.Position
+
+				if Distance.Magnitude < SmallestDistance and enemy:FindFirstChild("Humanoid").Health > 0 and UnitClone:FindFirstChild("Humanoid").Health > 0 and (enemy:GetAttribute("Floating") == false or UnitClone:GetAttribute("FloatingDetection") == true) and enemy.PrimaryPart.Position.Z <= 86 then
+					Target = enemy
+					SmallestDistance = Distance.Magnitude
+					Direction = Distance.Unit
+				end
+			end
+		end
+	end
+	
+	return Target, Direction, SmallestDistance
+end
+
+Events.SpawnUnit.OnServerEvent:Connect(function(plr, unit, lvl)
+	local SpawnUnit = Units:FindFirstChild(unit)
+	
+	if SpawnUnit and #workspace.Units:GetChildren() < 20 and workspace:GetAttribute("GameRunning") == true then
+		if plr:FindFirstChild("Money").Value >= SpawnUnit:GetAttribute("Price") then
+			plr:FindFirstChild("Money").Value -= SpawnUnit:GetAttribute("Price")
+			
+			SpawnUnit.PrimaryPart = SpawnUnit:WaitForChild("HumanoidRootPart")
+			
+			local UnitClone = SpawnUnit:Clone()
+			UnitClone.Parent = workspace.Units
+			wait()
+			print(UnitClone.PrimaryPart.Name)
+			UnitClone.PrimaryPart = UnitClone:WaitForChild("HumanoidRootPart")
+			UnitClone:SetPrimaryPartCFrame(workspace.Base.PrimaryPart.CFrame)
+			UnitClone:SetAttribute("Level", lvl)
+			
+			local Highlight = Instance.new("Highlight")
+			Highlight.Parent = UnitClone
+			Highlight.FillTransparency = 1
+			Highlight.OutlineColor = Color3.fromRGB(0, 0, 0)
+			Highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+			
+			local Highlight = Instance.new("Highlight")
+			Highlight.Parent = UnitClone:FindFirstChild("Head")
+			Highlight.FillTransparency = 1
+			Highlight.OutlineColor = Color3.fromRGB(0, 0, 0)
+			Highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+			
+			local Humanoid = UnitClone:WaitForChild("Humanoid")
+			
+			local HP = Humanoid.MaxHealth
+			
+			for i=2, UnitClone:GetAttribute("Level") do
+				HP *= 1.05
+			end
+			
+			Humanoid.MaxHealth = math.round(HP)
+			Humanoid.Health = math.round(HP)
+			
+			local MoveAnim = Humanoid:LoadAnimation(Humanoid:FindFirstChild("Move"))
+			local AttackAnim = Humanoid:LoadAnimation(Humanoid:FindFirstChild("Attack"))
+
+			local Damage = UnitClone:GetAttribute("Damage")
+			local AttackRange = UnitClone:GetAttribute("Range")
+			local AttackSpeed = UnitClone:GetAttribute("AttackSpeed")
+			local AOE = UnitClone:GetAttribute("AOE")
+
+			local LastAttack = tick()
+			local Target = nil
+			local SmallestDistance = 999999999999999
+			local Direction = nil
+			
+			local GUI = UnitClone.BillboardGui
+			local HPbar = GUI.HPbar
+			local HPtext = HPbar.HP
+			local ProgressBar = HPbar.ProgressBar.Bar
+			local Flash = HPbar.Flash
+			GUI.Adornee = GUI.Parent.Head
+			HPtext.Text = Humanoid.Health
+
+			local Enemies = workspace.Enemies
+
+			local Moving = false
+			
+			for i=2, UnitClone:GetAttribute("Level") do
+				Damage *= 1.05
+			end
+			
+			Damage = math.round(Damage)
+			
+			local AI;
+			AI = RunService.Heartbeat:Connect(function()
+				local Success = nil
+				
+				Success, Target, Direction, SmallestDistance = pcall(function()
+					return GetTarget(UnitClone)
+				end)
+				
+				if Target and Success then
+					Moving = false
+					if SmallestDistance > AttackRange then
+						Humanoid:Move(Direction)
+
+						if MoveAnim.IsPlaying == false then
+							MoveAnim:Play()
+						end
+
+					else
+						Humanoid:Move(Vector3.new())
+						MoveAnim:Stop()
+						UnitClone:SetPrimaryPartCFrame(CFrame.new(UnitClone.PrimaryPart.Position, Vector3.new(Target.PrimaryPart.Position.X, UnitClone.PrimaryPart.Position.Y, Target.PrimaryPart.Position.Z)))
+
+						if tick() - LastAttack >= AttackSpeed then
+							LastAttack = tick()
+							UnitClone:FindFirstChild("AttackSound"):Play()
+							AttackAnim:Play()
+							Target:FindFirstChild("Humanoid").Health -= Damage
+
+							if UnitClone:GetAttribute("Slow") then
+								coroutine.wrap(SlowDown)(Target, UnitClone:GetAttribute("Slow"), UnitClone:GetAttribute("SlowLength"))
+							end
+
+							if UnitClone:GetAttribute("ElectricityDamage") then
+								coroutine.wrap(Electricity)(Target, "Enemies", UnitClone:GetAttribute("ElectricityDamage"), 20, {Target})
+							end
+
+							if UnitClone:FindFirstChild("Humanoid"):FindFirstChild("Projectile") then
+								local Projectile = UnitClone.Humanoid.Projectile.Value:Clone()
+								Projectile.CFrame = CFrame.new(UnitClone.PrimaryPart.Position, Target.PrimaryPart.Position)
+								Projectile.Parent = workspace
+
+								TweenService:Create(Projectile, TweenInfo.new(SmallestDistance/100, Enum.EasingStyle.Linear), {Position = Target.PrimaryPart.Position}):Play()
+
+								game.Debris:AddItem(Projectile, (SmallestDistance/100) + 0.01)
+							end
+
+							if Target:FindFirstChild("Humanoid").Health <= 0 then
+								for i, player in ipairs(Players:GetPlayers()) do
+									local BountyBuff = 1
+
+									for i, Upgrade in ipairs(Data[player.UserId]["Upgrades"]) do
+										if Upgrade == "Bounty" then
+											BountyBuff *= 1.2
+										end
+									end
+
+									player.Money.Value += (Target:GetAttribute("Bounty")/#Players:GetPlayers()) * BountyBuff
+								end
+							end
+							
+							for i, enemy in ipairs(workspace.Enemies:GetChildren()) do
+								if enemy == Target then else
+									if enemy:FindFirstChild("Humanoid").Health > 0 then
+										local Distance = (Target.PrimaryPart.Position - enemy.PrimaryPart.Position).Magnitude
+
+										if Distance <= AOE then
+											enemy:FindFirstChild("Humanoid").Health -= Damage
+
+											if UnitClone:GetAttribute("Slow") then
+												coroutine.wrap(SlowDown)(enemy, UnitClone:GetAttribute("Slow"), UnitClone:GetAttribute("SlowLength"))
+											end
+										end
+									end
+								end
+							end
+							
+							local KnockBack = UnitClone:GetAttribute("Knockback")
+
+							wait(0.25)
+
+							if Target and Target.PrimaryPart then
+								Target:SetPrimaryPartCFrame(CFrame.new(Target.PrimaryPart.CFrame * (Vector3.new(Direction.X, 0, Direction.Z) * (KnockBack/Target:GetAttribute("KnockbackResistence")))))
+								
+								for i, enemy in ipairs(workspace.Enemies:GetChildren()) do
+									if enemy == Target then else
+										if enemy:FindFirstChild("Humanoid").Health > 0 then
+											local Distance = (Target.PrimaryPart.Position - enemy.PrimaryPart.Position).Magnitude
+
+											if Distance <= AOE then
+												enemy:SetPrimaryPartCFrame(CFrame.new(enemy.PrimaryPart.CFrame * (Vector3.new(Direction.X, 0, Direction.Z) * (KnockBack/enemy:GetAttribute("KnockbackResistence")))))
+												
+											end
+										end
+									end
+								end
+							end
+						end
+					end
+				else
+					if Moving == false then
+						Moving = true
+						MoveAnim:Play()
+
+						local Xpos = UnitClone.PrimaryPart.Position.X
+						local Ypos = UnitClone.PrimaryPart.Position.Y
+						local Zpos = UnitClone.PrimaryPart.Position.Z
+
+						local RanX = math.random(Xpos - 10, Xpos + 10)
+						local RanZ = math.random(Zpos - 10, Zpos + 10)
+
+						if RanZ > 30 then
+							RanZ = 30
+						elseif RanZ < -10 then
+							RanZ = -10
+						end
+
+						Humanoid:MoveTo(Vector3.new(RanX, Ypos, RanZ))
+
+						Humanoid.MoveToFinished:Connect(function()
+							MoveAnim:Stop()
+							wait(math.random(3,5))
+							Moving = false
+						end)
+					end
+				end
+			end)
+			
+			
+			UnitClone:FindFirstChild("Humanoid").HealthChanged:Connect(function()
+				HPtext.Text = Humanoid.Health
+				TweenService:Create(ProgressBar, TweenInfo.new(0.75), {Size = UDim2.new(Humanoid.Health/Humanoid.MaxHealth, 0, 1, 0)}):Play()
+
+				Flash.BackgroundTransparency = 0
+				TweenService:Create(Flash, TweenInfo.new(0.5), {BackgroundTransparency = 1}):Play()
+				
+				if Humanoid.Health <= 0 then
+					
+					for i, joint in ipairs(GUI.Parent:GetDescendants()) do
+						if joint:IsA("Motor6D") or joint:IsA("WeldConstraint") then
+							joint:Destroy()
+						end
+					end
+
+					wait(0.5)
+
+					HPbar:Destroy()
+					game.Debris:AddItem(Humanoid.Parent, 3)
+				end
+			end)
+		else
+			Events.PoorMessage:FireClient(plr)
+		end
+	end
+end)
+
+repeat wait() until workspace:GetAttribute("GameRunning") == true
+
+RunService.Heartbeat:Connect(function()
+	if workspace:GetAttribute("TimeInGame") >= 540 then
+		SpawnAbleEnemies = {Enemies.Zombtsubu, Enemies.Bonetsubu, Enemies.Spidertsubu, Enemies.Ghostsubu, Enemies.Mummytsubu, Enemies.Vamptsubu, Enemies.Deviltsubu}
+
+		MinEnemySpawnCooldown = 1
+		MaxEnemySpawnCooldown = 2
+		MinSwarmSpawn = 2
+		MaxSwarmSpawn = 3
+		MaxEnemies = 25
+	elseif workspace:GetAttribute("TimeInGame") >= 500 then
+		SpawnAbleEnemies = {Enemies.Ghostsubu}
+
+		MinEnemySpawnCooldown = 4
+		MaxEnemySpawnCooldown = 5
+		MinSwarmSpawn = 5
+		MaxSwarmSpawn = 8
+		MaxEnemies = 40
+	elseif workspace:GetAttribute("TimeInGame") >= 420 then
+		SpawnAbleEnemies = {Enemies.Zombtsubu, Enemies.Bonetsubu, Enemies.Spidertsubu, Enemies.Ghostsubu, Enemies.Mummytsubu, Enemies.Vamptsubu}
+
+		MinEnemySpawnCooldown = 2
+		MaxEnemySpawnCooldown = 5
+		MinSwarmSpawn = 2
+		MaxSwarmSpawn = 3
+		MaxEnemies = 25
+	elseif workspace:GetAttribute("TimeInGame") >= 360 then
+		SpawnAbleEnemies = {Enemies.Spidertsubu, Enemies.Mummytsubu}
+		
+		MinEnemySpawnCooldown = 10
+		MaxEnemySpawnCooldown = 15
+		MinSwarmSpawn = 10
+		MaxSwarmSpawn = 20
+		MaxEnemies = 20
+	elseif workspace:GetAttribute("TimeInGame") >= 301 then
+		if table.find(SpawnAbleEnemies, Enemies.Mummytsubu) then else
+			table.insert(SpawnAbleEnemies, Enemies.Mummytsubu)
+		end
+
+		MinEnemySpawnCooldown = 4
+		MaxEnemySpawnCooldown = 5
+		MaxEnemies = 15
+	elseif workspace:GetAttribute("TimeInGame") >= 250 then
+		if table.find(SpawnAbleEnemies, Enemies.Ghostsubu) then else
+			table.insert(SpawnAbleEnemies, Enemies.Ghostsubu)
+		end
+
+		MinEnemySpawnCooldown = 8
+		MaxEnemySpawnCooldown = 10
+		MaxSwarmSpawn = 3
+		MaxEnemies = 5
+	elseif workspace:GetAttribute("TimeInGame") >= 180 then
+		if table.find(SpawnAbleEnemies, Enemies.Spidertsubu) then else
+			table.insert(SpawnAbleEnemies, Enemies.Spidertsubu)
+			table.remove(SpawnAbleEnemies, table.find(SpawnAbleEnemies, Enemies.Zombtsubu))
+			table.remove(SpawnAbleEnemies, table.find(SpawnAbleEnemies, Enemies.Zombtsubu))
+		end
+
+		MinEnemySpawnCooldown = 6
+		MaxEnemySpawnCooldown = 8
+		MaxSwarmSpawn = 2
+		MaxEnemies = 3
+	elseif workspace:GetAttribute("TimeInGame") >= 100 then
+		if table.find(SpawnAbleEnemies, Enemies.Bonetsubu) then else
+			table.insert(SpawnAbleEnemies, Enemies.Bonetsubu)
+			table.insert(SpawnAbleEnemies, Enemies.Zombtsubu)
+			table.insert(SpawnAbleEnemies, Enemies.Zombtsubu)
+		end
+		
+		MinEnemySpawnCooldown = 5
+		MaxEnemySpawnCooldown = 7
+		MaxEnemies = 2
+	elseif workspace:GetAttribute("TimeInGame") >= 60 then
+		MinEnemySpawnCooldown = 6
+		MaxEnemySpawnCooldown = 8
+	end
+end)
+
+task.wait(5)
+
+while workspace:GetAttribute("GameRunning") == true do
+	for i=1, math.random(MinSwarmSpawn, MaxSwarmSpawn) * #Players:GetPlayers() do
+		if #workspace.Enemies:GetChildren() <= MaxEnemies then
+			local Enemy = SpawnAbleEnemies[math.random(1,#SpawnAbleEnemies)]:Clone()
+			Enemy.Parent = workspace.Enemies
+			Enemy:SetPrimaryPartCFrame(CFrame.new(Vector3.new(math.random(Map.Spawn1.Position.X, Map.Spawn2.Position.X), 5, math.random(Map.Spawn1.Position.Z, Map.Spawn2.Position.Z))))
+
+			local HP = Enemy.Humanoid.MaxHealth
+
+			for i=2, workspace:GetAttribute("GameDifficulty") do
+				HP *= 1.05
+			end
+
+			Enemy.Humanoid.MaxHealth = math.round(HP)
+			Enemy.Humanoid.Health = math.round(HP)
+
+			local Damage = Enemy:GetAttribute("Damage")
+
+			for i=2, workspace:GetAttribute("GameDifficulty") do
+				Damage *= 1.05
+			end
+
+			Enemy:SetAttribute("Damage", math.round(Damage))
+
+			Events.AddData:FireAllClients("DiscoveredEnemies", Enemy.Name)
+
+			wait(math.random(5,15)/10)
+		end
+	end
+	wait(math.random(MinEnemySpawnCooldown, MaxEnemySpawnCooldown))
+end
